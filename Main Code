@@ -1,0 +1,501 @@
+library(dplyr)
+library(readr)
+options(scipen=999)
+library(ggplot2)
+library(GGally)
+library('blscrapeR')
+library('quantmod')
+library(tidyverse)
+require(xts)
+source('rss_regress_funcs.R')
+source('Inflation_Adjust.R')
+library(caret)
+library(leaps)
+library(gridExtra)
+library(car)
+library(lattice)
+library(moments)
+library(lmtest)
+##install.packages('sandwich')
+library(sandwich)
+library(caTools)
+## install.packages('jtools')
+library(jtools)
+library(MASS)
+set.seed(123)
+
+Top1000 = read.csv('Top1000GrossingMovies.csv')
+
+#Top1000 = read.csv("/Users/nalla/Desktop/STAT-515/final_proj/Top1000GrossingMovies(1).csv")
+##Moviesmetadata = read.csv("/Users/nalla/Desktop/STAT-515/final_proj/movies_metadata.csv")
+#Top1000=na.omit(Top1000)
+##str(Moviesmetadata)
+str(Top1000)
+head(Top1000)
+write.csv(Top1000, file = 'Movies1.csv')
+Top1000$GrossNum <- Top1000 %>% dplyr::select(Gross) %>%
+  mutate(GrossNum = as.numeric(gsub("[$MK]", "", Gross)),
+         GrossNum = ifelse(grepl("K$", Gross), GrossNum * 1000, 
+                         ifelse(grepl("M$", Gross), GrossNum * 1000000, 
+                                GrossNum)), .keep="unused")
+Top1000$Worldwide.LT.Gross <- as.numeric(gsub('[$,]', '', Top1000$Worldwide.LT.Gross))
+Top1000$Metascore <- as.numeric(gsub('[$,]', '', Top1000$Metascore))
+Top1000$Votes <- parse_number(Top1000$Votes)
+Top1000$Duration <- as.numeric(gsub('[$,]', '', Top1000$Duration))
+Top1000$budget <- as.numeric(gsub('[$,]', '', Top1000$Budget.Estimated))
+Top1000$Year.of.Release <- as.numeric(gsub('[$,]', '', Top1000$Year.of.Realease))
+Top1000$Worldwide.LT.Gross <- unlist(Top1000$Worldwide.LT.Gross)
+Top1000$Metascore <- unlist(Top1000$Metascore)
+Top1000$Year.of.Release <- unlist(Top1000$Year.of.Release)
+Top1000$GrossNum <- unlist(Top1000$GrossNum)
+Top1000$GrossNum[is.na(Top1000$GrossNum)]<-median(Top1000$GrossNum,na.rm=TRUE)
+median(Top1000$GrossNum)
+Top1000$Worldwide.LT.Gross[is.na(Top1000$Worldwide.LT.Gross)]<-median(Top1000$Worldwide.LT.Gross,na.rm=TRUE)
+median(Top1000$Worldwide.LT.Gross)
+Top1000$budget[is.na(Top1000$budget)]<-median(Top1000$budget,na.rm=TRUE)
+median(Top1000$budget)
+
+write.csv(Top1000, file='Movies1.csv')
+
+Tophist <- ggplot(Top1000, aes(x=Year.of.Release , fill=Worldwide.LT.Gross))+
+  geom_histogram(alpha =0.5, position = "identity", colour = ' white', fill=" dark green")+
+  geom_freqpoly(color="black", size=1)+
+  labs(title=" Year of Release & Gross Worldwide Earning ",
+       x='Year of Release', y='Number of Movies Released',
+       subtitle = "Frequency Plot",
+       caption = "Source: Top 1,000 Highest Grossing Movies of all time")
+Tophist
+dev.off()
+
+library(ggrepel)
+Budget_Worldgross <- ggplot(Top1000, aes(x=budget, y=Worldwide.LT.Gross)) + 
+  geom_point(aes(col=Year.of.Release, size=Worldwide.LT.Gross)) + 
+  geom_smooth(method="loess", se=F) + 
+  labs(subtitle="Worldwide Gross Revenue", 
+       y="Gross Revenue", 
+       x="Budget", 
+       title="Top 1000 Grossing Movies, Based on Budget", 
+       caption = "Source: Top 1,000 Highest Grossing Movies of all time")+
+#geom_text(aes(label=ifelse(Worldwide.LT.Gross>2000000000,as.character(Movie.Title),'')),hjust=1,vjust=1)+
+   geom_label_repel(aes(label = Movie.Title),
+                    box.padding   = 0.35, 
+                    point.padding = 0.5,
+                    segment.color = 'grey50',
+                    data = subset(Top1000, Worldwide.LT.Gross>2000000000))
+Budget_Worldgross
+
+Budget_Year <- ggplot(Top1000, aes(x=Year.of.Release, y=budget,color =Worldwide.LT.Gross)) + 
+  geom_point(aes(size=Worldwide.LT.Gross)) + 
+  geom_smooth(method="loess", se=F, color='black',size=1) + 
+  labs(subtitle="Worldwide Gross Revenue", 
+       x="Year of Release", 
+       y="Budget", 
+       title="Top 1000 Grossing Movies(Based on Budget)", 
+       caption = "Source: Top 1,000 Highest Grossing Movies of all time")+
+  scale_color_gradient(low="dark green",high='yellow')+
+   geom_label_repel(aes(label = Movie.Title), box.padding   = 0.35, 
+                    point.padding = 0.5, segment.color = 'grey50',
+                    data = subset(Top1000, budget>300000000))
+Budget_Year
+
+Budget_Metascore <- ggplot(Top1000, aes(x=Metascore, y=budget)) + 
+   geom_point(aes(col=Metascore, size=budget)) + 
+   geom_smooth(method="loess", se=F) + 
+   labs(y="Budget", 
+        x="Metascore", 
+        title="Top 1000 Grossing Movies, Based on Metascore", 
+        caption = "Source: Top 1,000 Highest Grossing Movies of all time")+
+   geom_label_repel(aes(label = Movie.Title), box.padding   = 0.35, 
+                    point.padding = 0.5, segment.color = 'grey50',
+                    data = subset(Top1000, budget>300000000))
+Budget_Metascore
+
+library(lattice)
+Top1000$Profit <- (Top1000$Worldwide.LT.Gross-Top1000$budget)
+names(Top1000)
+panel = function (x, y, ...) { panel.xyplot(x, y, ...)
+   x1 <- x[x-y > 2000000000 | y-x > 2000000000]
+   y1 <- y[x-y > 2000000000 | y-x > 2000000000]
+   panel.text(x1, y1, labels=Top1000$Movie.Title, pos=3) 
+}
+
+Profit_Plot <- xyplot(Profit + budget ~ Year.of.Realease, data=Top1000, 
+                      col = c("blue", "red"), auto.key=T, smooth=FALSE,
+                      xlab = "Year of Release", 
+                      ylab = "Budget : Profit",
+                      panel = panel)
+
+Profit_Plot
+
+Top1000.columns <- data.frame(Top1000$Year.of.Release, Top1000$budget, Top1000$GrossNum, 
+   Top1000$Worldwide.LT.Gross, Top1000$Movie.Rating, Top1000$Duration, 
+   Top1000$Metascore)
+
+#ggpairs
+
+cor_fun <- function(data, mapping, method="pearson", ndp=4, sz=8, stars=TRUE, ...){
+   
+   x <- eval_data_col(data, mapping$x)
+   y <- eval_data_col(data, mapping$y)
+   
+   corr <- cor.test(x, y, method=method)
+   est <- corr$estimate
+   lb.size <- sz* abs(est) 
+   
+   if(stars){
+      stars <- c("*", "*", "", "")[findInterval(corr$p.value, c(0, 0.001, 0.01, 0.05, 1))]
+      lbl <- paste0(round(est, ndp), stars)
+   }else{
+      lbl <- round(est, ndp)
+   }
+   
+   ggplot(data=data, mapping=mapping) + 
+      annotate("text", x=mean(x, na.rm=TRUE), y=mean(y, na.rm=TRUE), label=lbl, size=lb.size,...)+
+      theme(panel.grid = element_blank())
+}
+
+ggpairs(Top1000.columns, 
+        lower=list(continuous=wrap("smooth", colour="blue")),
+        diag=list(continuous=wrap("barDiag", fill="red")),
+        upper=list(continuous=cor_fun))
+
+
+Top1000.columns$Year <- Top1000.columns$Top1000.Year.of.Release 
+
+Top1000.columns
+
+Top1000.lm <- lm(budget~ Year.of.Release+GrossNum+Worldwide.LT.Gross+
+                   Metascore+Duration+Votes+Movie.Rating, data=Top1000)
+summary(Top1000.lm)
+
+p1<-effect_plot(model= Top1000.lm, pred = Year.of.Release)
+p2<-effect_plot(model= Top1000.lm, pred = Worldwide.LT.Gross)
+p3<-effect_plot(model= Top1000.lm, pred = Metascore)
+p4<-effect_plot(model= Top1000.lm, pred = Duration)
+p5<-effect_plot(model= Top1000.lm, pred = Votes)
+p6<-effect_plot(model= Top1000.lm, pred = Movie.Rating)
+grid.arrange(p1,p2,p3,p4,p5,p6)
+
+avPlots(Top1000.lm, col="Red", col.lines="green", pch=14, lwd=2)
+
+plot(Top1000.lm)
+
+##This section of the script fails if you try to run the whole script. 
+## But if you run the function by itself, then run the rest from there, it runs just fine.
+
+Base.Year2022<- inflation_adjust(2022)
+Base.Year2022$Year<- as.numeric(format(Base.Year2022$date, format="%Y"))
+Base.Year2022
+
+Top1000.inflation<- left_join(Top1000.columns, Base.Year2022, by = "Year")
+Top1000.inflation
+write.csv(Top1000.inflation, file="InflationCheckpoint.csv")
+Top1000.inflation$Gross.Inf.Adj <- Top1000.inflation$Top1000.GrossNum/Top1000.inflation$adj_value
+Top1000.inflation
+
+hist(Top1000.inflation$Gross.Inf.Adj, main = "Top1000 Gross Inflation", xlab = "Top1000 gross inflation adjusted")
+
+Top1000.inflation$Budget.Infl.Adj<- Top1000.inflation$Top1000.budget/Top1000.inflation$adj_value
+Top1000.inflation$Worldwide.Inf.Adj<- Top1000.inflation$Top1000.Worldwide.LT.Gross/Top1000.inflation$adj_value
+head(Top1000.inflation)
+
+Top1000.Infl.Fin <- data.frame(Top1000.inflation$Year, Top1000.inflation$Budget.Infl.Adj, 
+      Top1000.inflation$Gross.Inf.Adj, Top1000.inflation$Worldwide.Inf.Adj, 
+      Top1000.inflation$adj_value, Top1000.inflation$Top1000.Movie.Rating,
+      Top1000.inflation$Top1000.Duration, Top1000.inflation$Top1000.Metascore)
+head(Top1000.Infl.Fin)                        
+
+Top1000.Infl.Fin$Top1000.inflation.Budget.Infl.Adj[is.na(
+  Top1000.Infl.Fin$Top1000.inflation.Budget.Infl.Adj)]<-median(
+  Top1000.Infl.Fin$Top1000.inflation.Budget.Infl.Adj,na.rm=TRUE)
+Top1000.Infl.Fin$Top1000.inflation.Budget.Infl.Adj
+Top1000.Infl.Fin$Top1000.inflation.Gross.Inf.Adj[is.na(
+  Top1000.Infl.Fin$Top1000.inflation.Gross.Inf.Adj)]<-median(
+    Top1000.Infl.Fin$Top1000.inflation.Gross.Infl.Adj,na.rm=TRUE)
+Top1000.Infl.Fin$Top1000.inflation.Worldwide.Inf.Adj[is.na(
+  Top1000.Infl.Fin$Top1000.inflation.Worldwide.Inf.Adj)]<-median(
+    Top1000.Infl.Fin$Top1000.inflation.Worldwide.Inf.Adj,na.rm=TRUE)
+Top1000.Infl.Fin$Top1000.inflation.Top1000.Movie.Rating[is.na(
+  Top1000.Infl.Fin$Top1000.inflation.Top1000.Movie.Rating)]<-median(
+    Top1000.Infl.Fin$Top1000.inflation.Top1000.Movie.Rating,na.rm=TRUE)
+Top1000.Infl.Fin$Top1000.inflation.Top1000.Duration[is.na(
+  Top1000.Infl.Fin$Top1000.inflation.Top1000.Duration)]<-median(
+    Top1000.Infl.Fin$Top1000.inflation.Top1000.Duration,na.rm=TRUE)
+Top1000.Infl.Fin$Top1000.inflation.Top1000.Metascore[is.na(
+  Top1000.Infl.Fin$Top1000.inflation.Top1000.Metascore)]<-median(
+    Top1000.Infl.Fin$Top1000.inflation.Top1000.Metascore,na.rm=TRUE)
+
+Top1000.Infl.Fin$Year <- Top1000.Infl.Fin$Top1000.inflation.Year
+Top1000.Infl.Fin$Budget <- Top1000.Infl.Fin$Top1000.inflation.Budget.Infl.Adj
+Top1000.Infl.Fin$WorldWide.Revenue <- Top1000.Infl.Fin$Top1000.inflation.Worldwide.Inf.Adj
+Top1000.Infl.Fin$Gross.US.Revenue <- Top1000.Infl.Fin$Top1000.inflation.Gross.Inf.Adj
+Top1000.Infl.Fin$Movie.Rating <- Top1000.Infl.Fin$Top1000.inflation.Top1000.Movie.Rating
+Top1000.Infl.Fin$MetaScore <- Top1000.Infl.Fin$Top1000.inflation.Top1000.Metascore
+Top1000.Infl.Fin$Duration <- Top1000.Infl.Fin$Top1000.inflation.Top1000.Duration
+
+str(Top1000.Infl.Fin)
+
+write.csv(Top1000.Infl.Fin, file="Top1000.Infl.Adjusted.csv")
+
+Top1000.Infl.Fin$Names <- Top1000$Movie.Title
+Top1000.Infl.Fin
+names(Top1000.Infl.Fin)
+
+Infl_Year_Worldgross <- ggplot(Top1000.Infl.Fin, aes(x=Top1000.inflation.Year, 
+                                                y=Top1000.inflation.Worldwide.Inf.Adj)) + 
+  geom_point(aes(col=Top1000.inflation.Year, size=Top1000.inflation.Year)) + 
+  geom_smooth() + 
+  xlim(c(1947, 2024)) + 
+  ylim(c(150000000, 3000000000)) + 
+  labs(subtitle="Worldwide Gross Revenue", 
+       y="Gross Revenue", 
+       x="Year of Release", 
+       title="Top 1000 Grossing Movies, Year of Release Vs Gross Worldwide Earnings", 
+       caption = "Source: Top 1,000 Highest Grossing Movies of all time")+
+   geom_label_repel(aes(label = Names),
+                    box.padding   = 0.35, 
+                    point.padding = 0.5,
+                    segment.color = 'grey50',
+                    data = subset(Top1000.Infl.Fin, 
+                                  Top1000.inflation.Worldwide.Inf.Adj>2500000000))
+Infl_Year_Worldgross
+
+Infl_Budget_Worldgross <- ggplot(Top1000.Infl.Fin, aes(x=Top1000.inflation.Budget.Infl.Adj, 
+                                                       y=Top1000.inflation.Worldwide.Inf.Adj)) + 
+  geom_point(aes(col=Top1000.inflation.Year, size=Top1000.inflation.Worldwide.Inf.Adj)) + 
+  geom_smooth(method="loess", se=F) + 
+  labs(subtitle="Worldwide Gross Revenue", 
+       y="Gross Worldwide Revenue", 
+       x="Budget", 
+       title="Top 1000 Grossing Movies, Based on Budget", 
+       caption = "Source: Top 1,000 Highest Grossing Movies of all time")+
+   geom_label_repel(aes(label = Names),
+                    box.padding   = 0.35, 
+                    point.padding = 0.5,
+                    segment.color = 'grey50',
+                    data = subset(Top1000.Infl.Fin, 
+                                  Top1000.inflation.Worldwide.Inf.Adj>3000000000))
+Infl_Budget_Worldgross
+
+ggplot(Top1000.Infl.Fin, aes(x=Top1000.inflation.Budget.Infl.Adj, fill=Top1000.inflation.Worldwide.Inf.Adj)) +
+  geom_histogram(alpha =0.5, position = "identity", colour = ' white', fill=" blue")+
+  geom_freqpoly(color="black", size=1)+
+  labs(title="Adjusted Inflation Budget vs Worldwide Adjusted Inflation  ",
+       x='Adjusted Inflation Budget',
+       subtitle = "Frequency Plot",
+       caption = "Source: Top 1,000 Highest Grossing Movies of all time")
+
+Top1000.infl.budget.lm <- lm(Top1000.inflation.Budget.Infl.Adj ~ 
+  Top1000.inflation.Year+Top1000.inflation.Gross.Inf.Adj+ Top1000.inflation.Worldwide.Inf.Adj+
+    Top1000.inflation.Top1000.Movie.Rating+ Top1000.inflation.Top1000.Duration+ 
+    Top1000.inflation.Top1000.Metascore, data=Top1000.Infl.Fin)
+summary(Top1000.infl.budget.lm)
+p.1<-effect_plot(Top1000.infl.budget.lm, pred = Top1000.inflation.Year, y.label = "Inflation Budget", x.label = "Inflation Year")
+p.2<-effect_plot(Top1000.infl.budget.lm, pred = Top1000.inflation.Gross.Inf.Adj, y.label = "Inflation Budget", x.label = "Inflation Gross")
+p.3<-effect_plot(Top1000.infl.budget.lm, pred = Top1000.inflation.Worldwide.Inf.Adj, y.label = "Inflation Budget", x.label = "Inflation Worlwide")
+p.4<-effect_plot(Top1000.infl.budget.lm, pred = Top1000.inflation.Top1000.Movie.Rating, y.label = "Inflation Budget", x.label = "Inflation Movie Rating")
+p.5<-effect_plot(Top1000.infl.budget.lm, pred = Top1000.inflation.Top1000.Duration, y.label = "Inflation Budget", x.label = "Inflation Duration")
+p.6<-effect_plot(Top1000.infl.budget.lm, pred = Top1000.inflation.Top1000.Metascore, y.label = "Inflation Budget", x.label = "Inflation Metascore")
+grid.arrange(p.1,p.2,p.3,p.4,p.5,p.6)
+
+avPlots(Top1000.infl.budget.lm, col="Red", col.lines="green", pch=14, lwd=2)
+
+trainIndex <- createDataPartition(
+  Top1000.Infl.Fin$Top1000.inflation.Gross.Inf.Adj, p = .8,
+  list = FALSE,
+  times = 1)
+
+split <- sample.split(Top1000.Infl.Fin$Top1000.inflation.Worldwide.Inf.Adj, SplitRatio = 0.80)
+trainingSet <- subset(Top1000.Infl.Fin, split == TRUE)
+testSet <- subset(Top1000.Infl.Fin, split == FALSE)
+
+Top1000.infl.worldrevenue.lm.train <- lm(Top1000.inflation.Worldwide.Inf.Adj ~ 
+                               Top1000.inflation.Year+Top1000.inflation.Gross.Inf.Adj+ Top1000.inflation.Budget.Infl.Adj+
+                               Top1000.inflation.Top1000.Movie.Rating+ Top1000.inflation.Top1000.Duration+ 
+                               Top1000.inflation.Top1000.Metascore, data=trainingSet)
+summary(Top1000.infl.worldrevenue.lm.train)
+
+diagPlots123(Top1000.infl.worldrevenue.lm.train, 'Diagnostics 1, 2, 3')
+diagPlots45(Top1000.infl.worldrevenue.lm.train, 'Diagnostics 4, 5')
+
+step.model.infl <- stepAIC(Top1000.infl.worldrevenue.lm.train, direction = "backward", 
+                      trace = FALSE)
+summary(step.model.infl)
+
+windows()
+kurtosis(residuals(step.model.infl))
+diagPlots123(step.model.infl, 'Diagnostics 1, 2, 3')
+diagPlots45(step.model.infl, 'Diagnostics 4, 5')
+
+
+bptest(step.model.infl)
+coeftest(step.model.infl, vcov = vcovHC(step.model.infl, "HC1"))
+trainingSet$resi <- step.model.infl$residuals
+varfunc.ols <- lm(log(resi^2) ~ log(Top1000.inflation.Year)+ log(Top1000.inflation.Gross.Inf.Adj)+ 
+  log(Top1000.inflation.Budget.Infl.Adj)+ log(Top1000.inflation.Top1000.Movie.Rating)+ 
+  log(Top1000.inflation.Top1000.Duration)+ log(Top1000.inflation.Top1000.Metascore), 
+  data=trainingSet)
+summary(varfunc.ols)
+
+infl.ols <- lm(Top1000.inflation.Worldwide.Inf.Adj ~ 
+  Top1000.inflation.Year+Top1000.inflation.Gross.Inf.Adj+ Top1000.inflation.Budget.Infl.Adj+
+  Top1000.inflation.Top1000.Movie.Rating+ Top1000.inflation.Top1000.Duration+ 
+  Top1000.inflation.Top1000.Metascore, data=trainingSet)
+trainingSet$resi <- infl.ols$residuals
+varfunc.ols <- lm(log(resi^2) ~ log(Top1000.inflation.Year)+ log(Top1000.inflation.Gross.Inf.Adj)+ 
+                    log(Top1000.inflation.Budget.Infl.Adj)+ log(Top1000.inflation.Top1000.Movie.Rating)+ 
+                    log(Top1000.inflation.Top1000.Duration)+ log(Top1000.inflation.Top1000.Metascore), 
+                  data=trainingSet)
+trainingSet$varfunc <- exp(varfunc.ols$fitted.values)
+Top1000.gls <- lm(Top1000.inflation.Worldwide.Inf.Adj ~ Top1000.inflation.Year+Top1000.inflation.Gross.Inf.Adj+ Top1000.inflation.Budget.Infl.Adj+
+                    Top1000.inflation.Top1000.Movie.Rating+ Top1000.inflation.Top1000.Duration+ 
+                    Top1000.inflation.Top1000.Metascore, weights = 1/sqrt(varfunc), data = trainingSet)
+summary(infl.ols)
+summary(Top1000.gls)
+
+Top1000.fin.lm <- stepAIC(Top1000.gls, direction = "backward", 
+                               trace = FALSE)
+summary(Top1000.fin.lm)
+
+p_1<-effect_plot(Top1000.fin.lm, pred = Top1000.inflation.Year)
+p_2<-effect_plot(Top1000.fin.lm, pred = Top1000.inflation.Gross.Inf.Adj, y.label = "Inflation Budget", x.label = "Inflation Gross")
+p_3<-effect_plot(Top1000.fin.lm, pred = Top1000.inflation.Worldwide.Inf.Adj, y.label = "Inflation Budget", x.label = "Inflation Worlwide")
+p_5<-effect_plot(Top1000.fin.lm, pred = Top1000.inflation.Top1000.Duration, y.label = "Inflation Budget", x.label = "Inflation Duration")
+grid.arrange(p_1,p_2,p_3,p_5)
+avPlots(Top1000.fin.lm)
+
+
+plot(density(Top1000.Infl.Fin$Top1000.inflation.Budget.Infl.Adj), main = "Density plot of Inflation Budget")
+plot(density(Top1000.Infl.Fin$Top1000.inflation.Gross.Inf.Adj), main = "Density plot of Inflation Gross")
+
+##p-value=0.00000001658 -- reject the hypothesis of heteroscedastic data
+
+kurtosis(residuals(Top1000.fin.lm))
+diagPlots123(Top1000.fin.lm, 'Diagnostics 1, 2, 3')
+diagPlots45(Top1000.fin.lm, 'Diagnostics 4, 5')
+
+
+
+train.sample = sample(1:nrow(Top1000.Infl.Fin),0.8*nrow(Top1000.Infl.Fin))
+
+Top1000.Test = Top1000.Infl.Fin$Top1000.inflation.Worldwide.Inf.Adj[-train.sample]
+length(train.sample)
+length(Top1000.Test)
+test = Top1000.Infl.Fin[-train.sample,]
+
+nrow(train)
+nrow(test)
+
+model.test <- lm(log(Top1000.inflation.Worldwide.Inf.Adj) ~ 
+                    Top1000.inflation.Year+Top1000.inflation.Gross.Inf.Adj+ Top1000.inflation.Budget.Infl.Adj+
+                    Top1000.inflation.Top1000.Movie.Rating+ Top1000.inflation.Top1000.Duration+ 
+                    Top1000.inflation.Top1000.Metascore, data=Top1000.Infl.Fin, subset=train.sample)
+summary(model.test)
+step.test <- stepAIC(model.test, direction = "backward", 
+                      trace = FALSE)
+summary(step.test)
+
+infl.ols.test <- lm(Top1000.inflation.Worldwide.Inf.Adj ~ 
+                 Top1000.inflation.Year+Top1000.inflation.Gross.Inf.Adj+ Top1000.inflation.Budget.Infl.Adj+
+                 Top1000.inflation.Top1000.Movie.Rating+ Top1000.inflation.Top1000.Duration+ 
+                 Top1000.inflation.Top1000.Metascore, data=testSet)
+testSet$resi <- infl.ols.test$residuals
+varfunc.ols.test <- lm(log(resi^2) ~ log(Top1000.inflation.Year)+ log(Top1000.inflation.Gross.Inf.Adj)+ 
+                    log(Top1000.inflation.Budget.Infl.Adj)+ log(Top1000.inflation.Top1000.Movie.Rating)+ 
+                    log(Top1000.inflation.Top1000.Duration)+ log(Top1000.inflation.Top1000.Metascore), 
+                  data=testSet)
+testSet$varfunc <- exp(varfunc.ols.test$fitted.values)
+Top1000.gls.test <- lm(Top1000.inflation.Worldwide.Inf.Adj ~ Top1000.inflation.Year+Top1000.inflation.Gross.Inf.Adj+ Top1000.inflation.Budget.Infl.Adj+
+                    Top1000.inflation.Top1000.Movie.Rating+ Top1000.inflation.Top1000.Duration+ 
+                    Top1000.inflation.Top1000.Metascore, weights = 1/sqrt(varfunc), data = testSet)
+summary(infl.ols.test)
+summary(Top1000.gls.test)
+
+Top1000.fin.lm.test <- stepAIC(Top1000.gls, direction = "backward", 
+                          trace = FALSE)
+summary(Top1000.fin.lm.test)
+
+logitModel <- lm(log(Top1000.inflation.Worldwide.Inf.Adj) ~ 
+   Top1000.inflation.Year+Top1000.inflation.Gross.Inf.Adj+ Top1000.inflation.Budget.Infl.Adj+ 
+   Top1000.inflation.Top1000.Duration,
+   data = trainingSet, 
+   family = binomial())
+
+summary(logitModel)
+
+logitModelPred <- predict(Top1000.fin.lm.test, testSet, type = "response")
+logitModelPred
+plot(logitModelPred, 
+     main = "Scatterplot of Probabilities of Earnings (Test data)", 
+     xlab = "Movie Number", ylab = "Predicted Worldwide Earnings")
+
+pred1 <- predict(Top1000.fin.lm.test, newdata = testSet)
+pred1
+rmse <- sqrt(sum((exp(pred1) - testSet$Top1000.inflation.Worldwide.Inf.Adj)^2)/length(testSet$Top1000.inflation.Worldwide.Inf.Adj))
+summary(Top1000.gls.test)
+c(RMSE = rmse, R2=summary(Top1000.fin.lm.test)$r.squared)
+##Model is 79.4% accurate
+
+par(mfrow=c(1,1))
+head(Top1000.Infl.Fin)
+Top1000.Infl.Fin$Budget <- Top1000.Infl.Fin$Top1000.inflation.Budget.Infl.Adj
+Top1000.Infl.Fin$Profit <- (Top1000.Infl.Fin$Top1000.inflation.Worldwide.Inf.Adj-Top1000.Infl.Fin$Budget)
+Top1000.Infl.Fin$Year <- Top1000.Infl.Fin$Top1000.inflation.Year
+
+names(Top1000)
+Top1000.Infl.Fin$Names <- Top1000$Movie.Title
+Top1000.Infl.Fin
+
+#plots
+#after inflation plots
+Plot_data_infl<-Top1000.Infl.Fin
+Plot_data_infl$Movie_Names<-Top1000$Movie.Title
+Plot_data_infl<-rename(Plot_data_infl, Inflation_Budget=Top1000.inflation.Budget.Infl.Adj)
+Plot_data_infl<-rename(Plot_data_infl, Worldwide_Inflation=Top1000.inflation.Worldwide.Inf.Adj)
+Plot_data_infl<-rename(Plot_data_infl, Release_Year=Top1000.inflation.Year)
+Plot_data_infl$Profit<-Plot_data_infl$Worldwide_Inflation-Plot_data_infl$Inflation_Budget
+Plot_data_infl<-rename(Plot_data_infl, Inflation_metascore=Top1000.inflation.Top1000.Metascore)
+names(Plot_data_infl)
+
+
+library(scales)
+TopBudget.Infl <- ggplot(Plot_data_infl, aes(x=Inflation_Budget, y=Worldwide_Inflation, label= Movie_Names)) + 
+  geom_point(aes(col=Release_Year, size=Worldwide_Inflation)) + 
+  geom_smooth(method="loess", se=F) + 
+  labs(subtitle="Worldwide Gross Revenue", 
+       y="Gross Worldwide Revenue", 
+       x="Budget", 
+       title="Top 1000 Grossing Movies( Inflation Based on Budget)", 
+       caption = "Source: Top 1,000 Highest Grossing Movies of all time")+
+  scale_x_continuous(labels = comma)+
+  scale_y_continuous(labels = comma)+
+  geom_text(aes(label= ifelse(( Worldwide_Inflation > quantile(Worldwide_Inflation, 0.994)),
+                              as.character(Movie_Names),'')),hjust=0,vjust=0,color="red")
+
+TopBudget.Infl
+
+Budget_Metascore_Infl <- ggplot(Plot_data_infl, aes(x=Inflation_metascore, y=Inflation_Budget)) + 
+  geom_point(aes(col=Release_Year, size=Worldwide_Inflation)) + 
+  geom_smooth(method="loess", se=F) + 
+  labs(y="Budget", 
+       x="Metascore", 
+       title="Top 1000 Grossing Movies, (Based on Metascore after Inflation)", 
+       caption = "Source: Top 1,000 Highest Grossing Movies of all time")+
+  geom_label_repel(aes(label = Movie_Names), box.padding   = 0.35, 
+                   point.padding = 0.5, segment.color = 'grey50',
+                   data = subset(Plot_data_infl, Inflation_Budget>400000000))+
+  scale_x_continuous(labels = comma)+
+  scale_y_continuous(labels = comma)
+
+
+Budget_Metascore_Infl
+
+library(lattice)
+xyplot(Profit + Inflation_Budget ~ Inflation_Budget, data=Plot_data_infl, col = c("blue", "red"), auto.key=T)
+panel = function (x, y, ...) { panel.xyplot(x, y, ...)
+  x1 <- x[x-y > 3000000000 | y-x > 3000000000]
+  y1 <- y[x-y > 3000000000 | y-x > 3000000000]
+  panel.text(x1, y1, labels=Plot_data_infl$Movie_Names, pos=3) 
+}
+
+
